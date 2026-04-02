@@ -78,7 +78,6 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PWD: ${SERVICE_PASSWORD_POSTGRES}
       POSTGRES_SEEDS: postgres
-      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
 
   temporal-ui:
     image: temporalio/ui:latest
