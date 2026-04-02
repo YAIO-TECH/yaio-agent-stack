@@ -1,0 +1,133 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
+      POSTGRES_DB: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      sh -lc 'redis-server --appendonly yes --requirepass "$${SERVICE_PASSWORD_REDIS}"'
+    environment:
+      SERVICE_PASSWORD_REDIS: ${SERVICE_PASSWORD_REDIS}
+    healthcheck:
+      test: ["CMD-SHELL", 'redis-cli -a "$${SERVICE_PASSWORD_REDIS}" ping | grep PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - redis-data:/data
+
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:13-rootless
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      USER_UID: 1000
+      USER_GID: 1000
+      FORGEJO__database__DB_TYPE: postgres
+      FORGEJO__database__HOST: postgres:5432
+      FORGEJO__database__NAME: postgres
+      FORGEJO__database__USER: postgres
+      FORGEJO__database__PASSWD: ${SERVICE_PASSWORD_POSTGRES}
+      FORGEJO__server__DOMAIN: forgejo.yaiotech.com
+      FORGEJO__server__ROOT_URL: https://forgejo.yaiotech.com/
+      FORGEJO__server__START_SSH_SERVER: "false"
+      FORGEJO__cache__ADAPTER: redis
+      FORGEJO__cache__HOST: redis://:${SERVICE_PASSWORD_REDIS}@redis:6379/0?pool_size=100&idle_timeout=180s
+      FORGEJO__session__PROVIDER: redis
+      FORGEJO__session__PROVIDER_CONFIG: redis://:${SERVICE_PASSWORD_REDIS}@redis:6379/1?pool_size=100&idle_timeout=180s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=coolify"
+      - "traefik.http.routers.forgejo.rule=Host(`forgejo.yaiotech.com`)"
+      - "traefik.http.routers.forgejo.entrypoints=https"
+      - "traefik.http.routers.forgejo.tls=true"
+      - "traefik.http.routers.forgejo.tls.certresolver=letsencrypt"
+      - "traefik.http.services.forgejo.loadbalancer.server.port=3000"
+    volumes:
+      - forgejo-data:/var/lib/gitea
+    networks:
+      - default
+      - coolify
+
+  temporal:
+    image: temporalio/auto-setup:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PWD: ${SERVICE_PASSWORD_POSTGRES}
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+
+  temporal-ui:
+    image: temporalio/ui:latest
+    restart: unless-stopped
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=coolify"
+      - "traefik.http.middlewares.temporal-auth.basicauth.users=temporaladmin:$$1$$vduQn/RB$$9sDff3nLfyTOQcAY9mBsH."
+      - "traefik.http.routers.temporal.rule=Host(`temporal.yaiotech.com`)"
+      - "traefik.http.routers.temporal.entrypoints=https"
+      - "traefik.http.routers.temporal.tls=true"
+      - "traefik.http.routers.temporal.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.temporal.middlewares=temporal-auth"
+      - "traefik.http.services.temporal.loadbalancer.server.port=8080"
+    networks:
+      - default
+      - coolify
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${SERVICE_PASSWORD_QDRANT_API_KEY}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=coolify"
+      - "traefik.http.middlewares.qdrant-auth.basicauth.users=qdrantadmin:$$1$$7xVPWmOb$$9YKNE5sPTjZJ6I.yI7hSA1"
+      - "traefik.http.routers.qdrant.rule=Host(`qdrant.yaiotech.com`)"
+      - "traefik.http.routers.qdrant.entrypoints=https"
+      - "traefik.http.routers.qdrant.tls=true"
+      - "traefik.http.routers.qdrant.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.qdrant.middlewares=qdrant-auth"
+      - "traefik.http.services.qdrant.loadbalancer.server.port=6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - default
+      - coolify
+
+volumes:
+  postgres-data:
+  redis-data:
+  forgejo-data:
+  qdrant-data:
+
+networks:
+  coolify:
+    external: true
